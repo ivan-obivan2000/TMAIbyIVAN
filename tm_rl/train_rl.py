@@ -24,7 +24,7 @@ def ppo_update(
         G = r + gamma * G
         returns.insert(0, G)
 
-    values = torch.cat(buffer.values).squeeze()
+    values = torch.stack(buffer.values).squeeze(-1)
     device = values.device
     returns = torch.tensor(returns, dtype=values.dtype, device=device)
     advantages = returns - values.detach()
