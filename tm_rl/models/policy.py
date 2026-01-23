@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class ActorCritic(nn.Module):
-    def __init__(self, obs_dim):
+    def __init__(self, obs_dim, act_dim: int = 3):
         super().__init__()
 
         self.shared = nn.Sequential(
@@ -16,6 +16,9 @@ class ActorCritic(nn.Module):
         self.mu_steer = nn.Linear(256, 1)
         self.mu_tb = nn.Linear(256, 2)      # throttle, brake
         self.log_std = nn.Parameter(torch.zeros(3))
+
+        self.mu = nn.Linear(256, act_dim)
+        self.log_std = nn.Parameter(torch.zeros(act_dim))
 
         # critic
         self.value = nn.Linear(256, 1)

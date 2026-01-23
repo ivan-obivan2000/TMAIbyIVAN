@@ -6,7 +6,7 @@ from typing import Dict, Tuple
 
 import numpy as np
 
-from tm_rl.utils.ghost import GhostData, LookaheadConfig, lookahead_target
+from utils.ghost import GhostData, LookaheadConfig, lookahead_target
 
 
 def obs_vec(
@@ -74,3 +74,6 @@ def action_vec(rec: Dict) -> np.ndarray:
     throttle = 1.0 if inputs.get("accelerate") else 0.0
     brake = 1.0 if inputs.get("brake") else 0.0
     return np.array([steer, throttle, brake], dtype=np.float32)
+
+def obs_dim(K: int, base_dim: int) -> int:
+    return K * base_dim

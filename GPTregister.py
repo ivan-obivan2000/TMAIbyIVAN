@@ -16,7 +16,7 @@ from tminterface.client import Client, run_client
 # ==========================
 # Настройки
 # ==========================
-LOG_DIR = "tmi_logs4"
+LOG_DIR = "tmi_logs01"
 os.makedirs(LOG_DIR, exist_ok=True)
 QUEUE_MAX = 100000
 

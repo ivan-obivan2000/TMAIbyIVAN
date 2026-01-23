@@ -9,13 +9,13 @@ from torch.utils.data import Dataset, DataLoader
 # ==========================
 # КОНФИГУРАЦИЯ
 # ==========================
-LOG_DIR = "tmi_logs3"
+LOG_DIR = "tmi_logs01"
 K = 50
 BATCH = 512
 EPOCHS = 40
 LR = 1e-3
-MODEL_NAME = "model_track_3.pt"
-GHOST_PATH = "ghost_data_3.npz"
+MODEL_NAME = "model_track_01.pt"
+GHOST_PATH = "ghost_data01.npz"
 
 N_BEST_EPISODES = 20  # Берем 5 лучших для усреднения
 

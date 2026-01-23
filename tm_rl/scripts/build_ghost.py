@@ -1,7 +1,4 @@
-"""Ghost trajectory utilities for Trackmania imitation/RL."""
-
-from __future__ import annotations
-
+import numpy as np
 import glob
 import json
 from dataclasses import dataclass
@@ -9,6 +6,8 @@ from typing import Iterable, List, Tuple
 
 import numpy as np
 from scipy.spatial import KDTree
+
+
 
 
 @dataclass
@@ -25,6 +24,10 @@ class GhostData:
     tree: KDTree
 
 
+LOG_DIR = "tmi_logs01"
+MIN_LEN = 200
+N_BEST = 3
+
 def _load_jsonl(path: str) -> List[dict]:
     records = []
     with open(path, "r", encoding="utf-8") as handle:
@@ -34,7 +37,6 @@ def _load_jsonl(path: str) -> List[dict]:
             except Exception:
                 continue
     return records
-
 
 def load_best_episodes(
     log_dir: str,
@@ -84,7 +86,6 @@ def load_best_episodes(
     )
     return final_episodes, weights
 
-
 def build_ghost(episodes: Iterable[Iterable[dict]]) -> GhostData:
     ghost_points = []
     for run in episodes:
@@ -97,26 +98,18 @@ def build_ghost(episodes: Iterable[Iterable[dict]]) -> GhostData:
     ghost_tree = KDTree(ghost_array)
     return GhostData(points=ghost_array, tree=ghost_tree)
 
+if __name__ == "__main__":
+    episodes, _ = load_best_episodes(
+        log_dir=LOG_DIR,
+        min_length=MIN_LEN,
+        n_best=N_BEST,
+    )
 
-def lookahead_target(
-    position: np.ndarray,
-    velocity: np.ndarray,
-    ghost: GhostData,
-    cfg: LookaheadConfig,
-) -> Tuple[np.ndarray, np.ndarray, float]:
-    query = np.concatenate([position, velocity])
-    dist_6d, idx = ghost.tree.query(query)
+    ghost = build_ghost(episodes)
 
-    speed = np.linalg.norm(velocity)
-    dynamic_steps = int(cfg.minimum + speed * cfg.factor)
-    dynamic_steps = min(dynamic_steps, cfg.maximum)
+    np.savez(
+        "ghost_data01.npz",
+        points=ghost.points,
+    )
 
-    remaining_steps = len(ghost.points) - 1 - idx
-    actual_steps = min(dynamic_steps, remaining_steps)
-    target_idx = idx + actual_steps
-
-    target_all = ghost.points[target_idx]
-    target_p = target_all[:3]
-    target_v = target_all[3:]
-
-    return target_p, target_v, float(dist_6d)
+    print(f"[OK] ghost saved: {ghost.points.shape}")
