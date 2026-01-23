@@ -19,8 +19,8 @@ def obs_vec(
 
     target_p, target_v, dist_6d = lookahead_target(position, velocity, ghost, cfg)
 
-    delta_p = target_p - position
-    delta_v = target_v - velocity
+    delta_p = (target_p - position) / 50.0
+    delta_v = (target_v - velocity) / 50.0
 
     speed = np.linalg.norm(velocity)
     v_norm = velocity / (speed + 1e-6)
@@ -34,6 +34,8 @@ def obs_vec(
     ang_vel = dyna.get("angular_speed") or [0, 0, 0]
     loc_v = car.get("current_local_speed") or [0, 0, 0]
 
+    velocity_scaled = velocity / 50.0
+
     feat = [
         delta_p[0],
         delta_p[1],
@@ -41,9 +43,9 @@ def obs_vec(
         delta_v[0],
         delta_v[1],
         delta_v[2],
-        velocity[0],
-        velocity[1],
-        velocity[2],
+        velocity_scaled[0],
+        velocity_scaled[1],
+        velocity_scaled[2],
         rec.get("speed_norm", 0) / 100.0,
         heading_error,
         quat[0],

@@ -16,6 +16,7 @@ def ppo_update(
 ) -> Dict[str, float]:
     if not buffer.rewards:
         return {"loss": 0.0, "actor_loss": 0.0, "critic_loss": 0.0}
+    model.train()
     # compute returns & advantages
     returns = []
     G = 0
@@ -51,6 +52,7 @@ def ppo_update(
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    model.eval()
 
     return {
         "loss": float(loss.detach().cpu()),

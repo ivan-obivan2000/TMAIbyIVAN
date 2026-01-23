@@ -7,6 +7,7 @@ class ActorCritic(nn.Module):
 
         self.shared = nn.Sequential(
             nn.Linear(obs_dim, 256),
+            nn.LayerNorm(256),
             nn.ReLU(),
             nn.Linear(256, 256),
             nn.ReLU(),
