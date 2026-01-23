@@ -110,6 +110,11 @@ class RLClient(Client):
             state=state,
             race_time_ms=int(s.race_time),
         )
+        print(
+        f"ACT raw: steer={action[0]:.3f}, "
+        f"thr={action[1]:.3f}, "
+        f"br={action[2]:.3f}"
+    )
         if not controls:
             return
 

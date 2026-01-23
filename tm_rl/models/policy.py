@@ -19,9 +19,15 @@ class ActorCritic(nn.Module):
 
         self.mu = nn.Linear(256, act_dim)
         self.log_std = nn.Parameter(torch.zeros(act_dim))
+        
 
         # critic
         self.value = nn.Linear(256, 1)
+
+        with torch.no_grad():
+            self.mu_steer.bias.fill_(0.0)
+            self.mu_tb.bias[0].fill_(1.5)   # throttle
+            self.mu_tb.bias[1].fill_(-2.0) 
 
     def forward(self, x):
         h = self.shared(x)

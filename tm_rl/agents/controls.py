@@ -38,6 +38,10 @@ def decide_controls(
     cfg: ControlConfig,
     smoother: SteeringSmoother,
 ) -> Tuple[bool, bool, int, bool, bool]:
+    if race_time_ms < 1500 or speed_norm < 1.0:
+        accel_on = True
+        brake_on = False
+        
     if race_time_ms < cfg.force_gas_time_ms:
         accel_on = True
         brake_on = False
