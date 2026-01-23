@@ -6,9 +6,15 @@ def compute_reward(prev_r, r, action, return_info=False):
     info = {}
 
     # скорость
-    speed_reward = r.get("speed_norm", 0.0) * 0.01
+    speed_norm = float(r.get("speed_norm", 0.0))
+    speed_reward = speed_norm * 0.01
     reward += speed_reward
     info["speed"] = speed_reward
+
+    # штраф если стоим
+    idle_penalty = -0.02 if speed_norm < 1.0 else 0.0
+    reward += idle_penalty
+    info["idle"] = idle_penalty
 
     # штраф за боковое скольжение
     side_slip_penalty = -abs(r.get("sync", {}).get("speed_sideward", 0.0)) * 0.05
@@ -20,6 +26,13 @@ def compute_reward(prev_r, r, action, return_info=False):
     steer_penalty = -abs(steer) * 0.02
     reward += steer_penalty
     info["steer"] = steer_penalty
+
+    # штраф за сильный руль на высокой скорости
+    high_speed_steer_penalty = 0.0
+    if speed_norm > 15.0:
+        high_speed_steer_penalty = -abs(steer) * (speed_norm / 50.0) * 0.05
+        reward += high_speed_steer_penalty
+    info["high_speed_steer"] = high_speed_steer_penalty
 
     # штраф за скольжение
     sliding_penalty = 0.0
@@ -39,6 +52,18 @@ def compute_reward(prev_r, r, action, return_info=False):
     reward += distance_reward
     info["distance"] = distance_reward
     info["distance_delta"] = distance_delta
+
+    # скорость вдоль направления движения
+    speed_along = 0.0
+    if distance_delta > 1e-6:
+        dir_norm = (dx / distance_delta, dy / distance_delta, dz / distance_delta)
+        vel = r.get("velocity") or (0.0, 0.0, 0.0)
+        speed_along = (
+            vel[0] * dir_norm[0] + vel[1] * dir_norm[1] + vel[2] * dir_norm[2]
+        )
+    speed_along_reward = speed_along * 0.01
+    reward += speed_along_reward
+    info["speed_along"] = speed_along_reward
 
     # штраф за время (чем быстрее, тем лучше)
     prev_time = int(prev_r.get("race_time_ms", r.get("race_time_ms", 0)))

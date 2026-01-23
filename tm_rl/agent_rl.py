@@ -107,6 +107,8 @@ class RLClient(Client):
         self.episode_reward = 0.0
         self.episode_steps = 0
         self.episode_start_race_time = None
+        self.stuck_since_ms = None
+        self.stuck_reason = None
 
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(Path(MODEL_PATH).parent, exist_ok=True)
@@ -144,6 +146,8 @@ class RLClient(Client):
         ):
             self.agent.reset()
             self.episode_start_race_time = race_time
+            self.stuck_since_ms = None
+            self.stuck_reason = None
 
         if self.episode_start_race_time is None:
             self.episode_start_race_time = race_time
@@ -168,6 +172,20 @@ class RLClient(Client):
             reward = float(transition["reward"])
             reward_info = transition.get("reward_info", {})
             done = bool(transition["done"])
+            speed_norm = float(state.get("speed_norm", 0.0))
+            distance_delta = float(reward_info.get("distance_delta", 0.0))
+
+            if speed_norm < 1.0 and distance_delta < 0.002:
+                if self.stuck_since_ms is None:
+                    self.stuck_since_ms = race_time
+                elif race_time - self.stuck_since_ms >= 2500:
+                    done = True
+                    self.stuck_reason = "anti_stuck"
+            else:
+                self.stuck_since_ms = None
+                self.stuck_reason = None
+            if done:
+                transition["done"] = float(done)
 
             self.buffer.add(
                 obs=obs_t,
@@ -197,9 +215,9 @@ class RLClient(Client):
                     f" step={self.global_steps}"
                     f" reward={reward:.3f}"
                     f" ep_reward={self.episode_reward:.3f}"
-                    f" speed={float(state.get('speed_norm', 0.0)):.2f}"
+                    f" speed={speed_norm:.2f}"
                     f" time_ms={int(state.get('race_time_ms', 0))}"
-                    f" dist={reward_info.get('distance_delta', 0.0):.3f}"
+                    f" dist={distance_delta:.3f}"
                     f" time_pen={reward_info.get('time', 0.0):.3f}"
                     f" finish_bonus={reward_info.get('finish_bonus', 0.0):.3f}"
                 )
@@ -248,13 +266,13 @@ class RLClient(Client):
         iface.set_input_state(
             accelerate=controls["accelerate"],
             brake=controls["brake"],
-            left=controls["left"],
-            right=controls["right"],
+            left=False,
+            right=False,
             steer=controls["steer"],   # <-- важно
         )
 
         # ===== episode end =====
-        if transition and transition["done"]:
+        if transition and done:
             self.agent.reset()
             episode_time_ms = 0
             if self.episode_start_race_time is not None:
@@ -268,6 +286,7 @@ class RLClient(Client):
                             "episode_reward": self.episode_reward,
                             "episode_steps": self.episode_steps,
                             "episode_time_ms": episode_time_ms,
+                            "episode_reason": self.stuck_reason or "done",
                         }
                     )
                 except Exception:
@@ -277,10 +296,13 @@ class RLClient(Client):
                 f" steps={self.episode_steps}"
                 f" reward={self.episode_reward:.2f}"
                 f" time_ms={episode_time_ms}"
+                f" reason={self.stuck_reason or 'done'}"
             )
             self.episode_reward = 0.0
             self.episode_steps = 0
             self.episode_start_race_time = None
+            self.stuck_since_ms = None
+            self.stuck_reason = None
 
 
 # ==========================

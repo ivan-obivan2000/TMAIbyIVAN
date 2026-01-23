@@ -6,10 +6,12 @@ def extract_state(s):
         "velocity": list(s.velocity),
         "speed_norm": float(np.linalg.norm(s.velocity)),
         "race_time_ms": int(getattr(s, "race_time", 0)),
+        "finish_time_ms": int(getattr(s, "finish_time", 0)),
         "race_finished": bool(
             getattr(s, "race_finished", False)
             or getattr(s, "is_finished", False)
             or getattr(s, "finished", False)
+            or getattr(s, "finish_time", 0) > 0
         ),
         "car": {},
         "engine": {},

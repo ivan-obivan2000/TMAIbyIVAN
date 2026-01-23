@@ -1,5 +1,5 @@
 def is_done(prev_state, state):
-    if state.get("race_finished"):
+    if state.get("race_finished") or state.get("finish_time_ms", 0) > 0:
         return True
 
     # рестарт / телепорт

@@ -37,21 +37,21 @@ def decide_controls(
     race_time_ms: int,
     cfg: ControlConfig,
     smoother: SteeringSmoother,
-) -> Tuple[bool, bool, int, bool, bool]:
+) -> Tuple[bool, bool, int]:
 
     if race_time_ms < cfg.force_gas_time_ms:
         accel_on = True
         brake_on = False
     else:
-        accel_on = throttle_prob > 0.5
-        brake_on = brake_prob > 0.8
+        accel_on = throttle_prob > 0.3
+        brake_on = brake_prob > 0.7
+        if brake_on:
+            accel_on = False
         speed_kmh = speed_norm * 3.6
         if speed_kmh < cfg.min_launch_speed_kmh and not brake_on:
             accel_on = True
 
     steer_smoothed = smoother.update(steer_raw)
     steer_int = int(np.clip(steer_smoothed, -1.0, 1.0) * cfg.max_steer)
-    left = steer_int < -2000
-    right = steer_int > 2000
 
-    return accel_on, brake_on, steer_int, left, right
+    return accel_on, brake_on, steer_int
