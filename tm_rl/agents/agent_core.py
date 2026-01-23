@@ -45,7 +45,7 @@ class TrackmaniaAgent:
         self,
         state: Dict,
         race_time_ms: int,
-    ) -> Tuple[Dict[str, bool], np.ndarray, Optional[Dict[str, float]]]:
+    ) -> Tuple[Dict[str, bool], np.ndarray, Optional[Dict[str, float | np.ndarray]]]:
         """Return control inputs, raw action, and optional transition info."""
         obs, _ = obs_vec(state, self.ghost, self.cfg.lookahead)
 
@@ -93,11 +93,12 @@ class TrackmaniaAgent:
             "steer": steer_int,   # <-- было steer_int
         }
 
-        transition: Optional[Dict[str, float]] = None
+        transition: Optional[Dict[str, float | np.ndarray]] = None
         if self.prev_state is not None:
             reward = compute_reward(self.prev_state, state, action)
             done = is_done(self.prev_state, state)
             transition = {
+                "obs": obs_stack,
                 "reward": float(reward),
                 "done": float(done),
                 "value": float(value.item()),

@@ -1,21 +1,36 @@
 import sys
 import numpy as np
+import queue
 
 from tminterface.client import Client, run_client
 from tminterface.interface import TMInterface
 
 from agents.agent_core import TrackmaniaAgent, AgentConfig
 from models.policy import ActorCritic
+from train_rl import ppo_update
+from utils.buffer import RolloutBuffer
 from utils.ghost_runtime import load_ghost_npz
+from utils.log_writer import WriterThread
 from utils.state import extract_state
 import torch
 import os
+from pathlib import Path
+from datetime import datetime
+# ==========================
+# CONFIG
+# ==========================
+LOG_DIR = "tr_tl_logs"
+MODEL_PATH = "models/rl_policy.pt"
+LOG_EVERY_STEPS = 200
+UPDATE_EVERY_STEPS = 1024
+LR = 3e-4
+
 # ==========================
 # LOADERS
 # ==========================
 def load_model(
     obs_dim: int,
-    path: str = "models/rl_policy.pt",
+    path: str = MODEL_PATH,
     device: str = "cpu",
 ):
     model = ActorCritic(obs_dim=obs_dim).to(device)
@@ -86,10 +101,29 @@ class RLClient(Client):
 
         self.prev_t = None
         self.prev_race_time = None
+        self.buffer = RolloutBuffer()
+        self.optimizer = torch.optim.Adam(self.agent.model.parameters(), lr=LR)
+        self.global_steps = 0
+        self.episode_reward = 0.0
+        self.episode_steps = 0
+
+        os.makedirs(LOG_DIR, exist_ok=True)
+        os.makedirs(Path(MODEL_PATH).parent, exist_ok=True)
+        log_name = f"rl_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
+        self.log_path = Path(LOG_DIR) / log_name
+        self.log_queue = None
+        self.log_writer = None
 
     # ---------- TM hooks ----------
     def on_registered(self, iface: TMInterface):
         print("[OK] RL agent connected")
+        self.log_queue = queue.Queue(maxsize=10000)
+        self.log_writer = WriterThread(self.log_queue, self.log_path)
+        self.log_writer.start()
+
+    def on_shutdown(self, iface: TMInterface):
+        if self.log_writer:
+            self.log_writer.stop()
 
     def on_run_step(self, iface: TMInterface, t: int):
         if t < 0:
@@ -121,11 +155,64 @@ class RLClient(Client):
             race_time_ms=int(s.race_time),
         )
 
-        print(
-            f"ACT raw: steer={action[0]:.3f}, "
-            f"thr={action[1]:.3f}, "
-            f"br={action[2]:.3f}"
-        )
+        if transition:
+            obs_t = torch.tensor(transition["obs"], dtype=torch.float32)
+            act_t = torch.tensor(action, dtype=torch.float32)
+            logprob_t = torch.tensor(transition["logprob"], dtype=torch.float32)
+            value_t = torch.tensor(transition["value"], dtype=torch.float32)
+            reward = float(transition["reward"])
+            done = bool(transition["done"])
+
+            self.buffer.add(
+                obs=obs_t,
+                action=act_t,
+                logprob=logprob_t,
+                reward=reward,
+                value=value_t,
+                done=done,
+            )
+
+            self.global_steps += 1
+            self.episode_reward += reward
+            self.episode_steps += 1
+
+            if self.global_steps % LOG_EVERY_STEPS == 0:
+                rec = {
+                    "step": self.global_steps,
+                    "reward": reward,
+                    "episode_reward": self.episode_reward,
+                    "episode_steps": self.episode_steps,
+                    "speed": float(state.get("speed_norm", 0.0)),
+                }
+                if self.log_queue:
+                    try:
+                        self.log_queue.put_nowait(rec)
+                    except Exception:
+                        pass
+
+            if self.global_steps % UPDATE_EVERY_STEPS == 0:
+                self.agent.model.train()
+                metrics = ppo_update(
+                    model=self.agent.model,
+                    buffer=self.buffer,
+                    optimizer=self.optimizer,
+                )
+                self.agent.model.eval()
+                torch.save(self.agent.model.state_dict(), MODEL_PATH)
+                self.buffer.clear()
+                if self.log_queue:
+                    try:
+                        self.log_queue.put_nowait(
+                            {
+                                "step": self.global_steps,
+                                "update": True,
+                                "loss": metrics["loss"],
+                                "actor_loss": metrics["actor_loss"],
+                                "critic_loss": metrics["critic_loss"],
+                            }
+                        )
+                    except Exception:
+                        pass
 
         # если агент ещё накапливает историю — пусть газует прямо сейчас
         if not controls:
@@ -150,6 +237,20 @@ class RLClient(Client):
         # ===== episode end =====
         if transition and transition["done"]:
             self.agent.reset()
+            if self.log_queue:
+                try:
+                    self.log_queue.put_nowait(
+                        {
+                            "episode": True,
+                            "step": self.global_steps,
+                            "episode_reward": self.episode_reward,
+                            "episode_steps": self.episode_steps,
+                        }
+                    )
+                except Exception:
+                    pass
+            self.episode_reward = 0.0
+            self.episode_steps = 0
 
 
 # ==========================
