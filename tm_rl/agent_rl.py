@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -18,8 +18,8 @@ class AgentConfig:
     """Configuration for the minimal agent loop."""
 
     device: str = "cpu"
-    control: ControlConfig = ControlConfig()
-    lookahead: LookaheadConfig = LookaheadConfig()
+    control: ControlConfig = field(default_factory=ControlConfig)
+    lookahead: LookaheadConfig = field(default_factory=LookaheadConfig)
 
 
 class TrackmaniaAgent:
