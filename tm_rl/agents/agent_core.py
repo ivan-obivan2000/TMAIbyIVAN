@@ -90,7 +90,7 @@ class TrackmaniaAgent:
             "brake": brake_on,
             "left": left,
             "right": right,
-            "steer_int": steer_int,
+            "steer": steer_int,   # <-- было steer_int
         }
 
         transition: Optional[Dict[str, float]] = None

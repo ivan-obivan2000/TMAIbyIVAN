@@ -12,29 +12,29 @@ class ActorCritic(nn.Module):
             nn.ReLU(),
         )
 
-        # actor
-        self.mu_steer = nn.Linear(256, 1)
-        self.mu_tb = nn.Linear(256, 2)      # throttle, brake
-        self.log_std = nn.Parameter(torch.zeros(3))
-
-        self.mu = nn.Linear(256, act_dim)
-        self.log_std = nn.Parameter(torch.zeros(act_dim))
+        # actor (раздельные головы)
+        self.mu_steer = nn.Linear(256, 1) # steer
+        self.mu_tb = nn.Linear(256, 2)    # gas, brake
         
-
         # critic
         self.value = nn.Linear(256, 1)
 
+        # log_std общий параметр
+        self.log_std = nn.Parameter(torch.zeros(act_dim))
+
+        # Инициализация весов (опционально, но полезно)
         with torch.no_grad():
             self.mu_steer.bias.fill_(0.0)
-            self.mu_tb.bias[0].fill_(1.5)   # throttle
-            self.mu_tb.bias[1].fill_(-2.0) 
+            self.mu_tb.bias[0].fill_(1.5)   # throttle bias
+            self.mu_tb.bias[1].fill_(-2.0)  # brake bias
 
     def forward(self, x):
         h = self.shared(x)
 
+        # Объединяем выходы: steer [-1, 1], gas/brake [0, 1]
         mu = torch.cat([
-            torch.tanh(self.mu_steer(h)),   # [-1..1]
-            torch.sigmoid(self.mu_tb(h))    # [0..1]
+            torch.tanh(self.mu_steer(h)),
+            torch.sigmoid(self.mu_tb(h))
         ], dim=1)
 
         std = self.log_std.exp()

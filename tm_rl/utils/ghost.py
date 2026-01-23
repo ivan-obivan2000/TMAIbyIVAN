@@ -16,7 +16,7 @@ class LookaheadConfig:
     minimum: int = 4
     maximum: int = 12
     factor: float = 0.1
-    history: int = 10 
+    history: int = 20 
 
 
 @dataclass

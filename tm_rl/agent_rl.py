@@ -39,40 +39,50 @@ def load_model(
 class RLClient(Client):
     def __init__(self):
         super().__init__()
-
+        
+        # Вынесите импорты наверх файла или убедитесь, что структура папок верна.
+        # Предполагаем, что obs_vec и LookaheadConfig доступны.
         from env.obs import obs_vec
-        from utils.ghost_runtime import load_ghost_npz
         from utils.ghost import LookaheadConfig
 
-        ghost = load_ghost_npz("ghost_data01.npz")
-        lookahead = LookaheadConfig()
-        K = 10
+        # Проверка наличия файла призрака
+        ghost_path = "ghost_data01.npz"
+        if not os.path.exists(ghost_path):
+            print(f"[ERROR] Ghost file {ghost_path} not found!")
+            sys.exit(1)
 
-        # ---- dummy state (минимальный) ----
+        self.ghost = load_ghost_npz(ghost_path)
+        self.lookahead = LookaheadConfig()
+
+        
+        # Конфигурация истории
+        K = self.lookahead.history  # Лучше брать из конфига, если там есть, или 10
+        if not hasattr(self.lookahead, 'history'):
+             K = 10 # Fallback если в конфиге нет поля
+
+        # ---- dummy state для расчета размерности ----
         dummy_state = {
             "position": np.zeros(3, dtype=np.float32),
             "velocity": np.zeros(3, dtype=np.float32),
             "speed_norm": 0.0,
-            "car": {},
-            "engine": {},
-            "dyna": {},
+            "car": {}, "engine": {}, "dyna": {},
+            "inputs": {} # obs_vec может обращаться к inputs
         }
 
-        # ---- один obs_vec ----
-        single_obs, _ = obs_vec(dummy_state, ghost, lookahead)
+        # Расчет размерности
+        single_obs, _ = obs_vec(dummy_state, self.ghost, self.lookahead)
         BASE_OBS_DIM = len(single_obs)
-
         OBS_DIM = BASE_OBS_DIM * K
 
         print(f"[OBS] single={BASE_OBS_DIM}, K={K}, total={OBS_DIM}")
 
-
+        # Инициализация агента
         self.agent = TrackmaniaAgent(
             model=load_model(obs_dim=OBS_DIM),
-            ghost=ghost,
+            ghost=self.ghost,
+            # Важно передать конфиг с правильным lookahead
+            cfg=AgentConfig(lookahead=self.lookahead) 
         )
-        
-
 
         self.prev_t = None
         self.prev_race_time = None
@@ -110,24 +120,32 @@ class RLClient(Client):
             state=state,
             race_time_ms=int(s.race_time),
         )
-        print(
-        f"ACT raw: steer={action[0]:.3f}, "
-        f"thr={action[1]:.3f}, "
-        f"br={action[2]:.3f}"
-    )
-        if not controls:
-            return
 
-        # ===== apply controls =====
+        print(
+            f"ACT raw: steer={action[0]:.3f}, "
+            f"thr={action[1]:.3f}, "
+            f"br={action[2]:.3f}"
+        )
+
+        # если агент ещё накапливает историю — пусть газует прямо сейчас
         if not controls:
             iface.set_input_state(
-                accelerate=False,
+                accelerate=True,
                 brake=False,
                 left=False,
                 right=False,
                 steer=0,
             )
             return
+
+        # ===== apply controls =====
+        iface.set_input_state(
+            accelerate=controls["accelerate"],
+            brake=controls["brake"],
+            left=controls["left"],
+            right=controls["right"],
+            steer=controls["steer"],   # <-- важно
+        )
 
         # ===== episode end =====
         if transition and transition["done"]:
