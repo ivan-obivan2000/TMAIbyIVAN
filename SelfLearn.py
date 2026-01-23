@@ -18,34 +18,38 @@ from tminterface.client import Client, run_client
 # ==========================
 # КОНФИГУРАЦИЯ
 # ==========================
-MODEL_PATH = "self_learned_model.pt"
+MODEL_PATH = "self_learned_model_v3.pt"
 LOG_DIR = "self_learning_logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Обучение
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 LR = 1e-4
-TRAIN_EPOCHS_PER_GEN = 3
+TRAIN_EPOCHS_PER_GEN = 4
+TRAIN_EVERY_EPISODES = 5
 MEMORY_SIZE = 100000
 
-# Награды (Rewards)
-REWARD_SPEED = 2.0        
-REWARD_DISTANCE = 0.1     
-REWARD_CRASH = -400.0      
-REWARD_SMOOTH = -0.5     
-REWARD_FINISH = 1000.0    
+# Награды
+REWARD_SPEED = 3.0
+REWARD_DISTANCE = 0.2
+REWARD_CRASH = -100.0
+REWARD_FINISH = 2000.0
+REWARD_BEST_TIME = 3000.0
 
 # Exploration
-EXPLORATION_NOISE = 0.2   
+EXPLORATION_NOISE = 0.15
 
-# Forced Start
-FORCE_GAS_MS = 2000       
+# Forced Start (сколько мс жать газ на старте без руления)
+FORCE_GAS_MS = 1000 
+
+# Скорость игры
+GAME_SPEED = 1
 
 # Логирование
 QUEUE_MAX = 100000
 
 # ==========================
-# WRITER THREAD (Для логов)
+# WRITER THREAD
 # ==========================
 class WriterThread(threading.Thread):
     def __init__(self, q: queue.Queue, first_path: Path):
@@ -75,13 +79,11 @@ class WriterThread(threading.Thread):
             except queue.Empty:
                 continue
             
-            # Спец-команда: ротация файла
             if isinstance(rec, dict) and rec.get("_cmd") == "rotate":
                 new_path = Path(rec["path"])
                 self._open(new_path)
                 continue
             
-            # Обычная запись
             try:
                 self._file.write(json.dumps(rec, ensure_ascii=False) + "\n")
             except Exception: pass
@@ -124,9 +126,12 @@ class ReplayBuffer:
         obs, act, rew = zip(*batch)
         return np.array(obs), np.array(act), np.array(rew)
 
-    def save_episode(self, episode_data):
+    def save_episode(self, episode_data, extra_reward=0.0):
         gamma = 0.99
         running_add = 0
+        if extra_reward != 0:
+            episode_data[-1]['reward'] += extra_reward
+
         for step in reversed(episode_data):
             running_add = running_add * gamma + step['reward']
             self.push(step['obs'], step['act'], running_add)
@@ -146,99 +151,121 @@ class SelfLearningAgent(Client):
             try:
                 self.model.load_state_dict(torch.load(MODEL_PATH))
                 self.model.eval()
-            except:
-                print("Error loading model, starting fresh.")
+            except: pass
         
         self.current_episode = []
         self.last_pos = None
-        self.last_steer = 0.0
         self.total_reward = 0.0
         self.episode_count = 0
-        self.is_training = False
-        self.best_reward = -10000.0
+        
+        # Флаг состояния
+        self.is_waiting_for_restart = False 
+        self.stuck_counter = 0 # Счетчик попыток рестарта
 
-        # Логгер
+        self.best_time = 999999999
+        
         self.q = queue.Queue(maxsize=QUEUE_MAX)
         self.writer = None
         self.session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.current_log_path = None
+        self.current_log_path = self._make_log_path()
 
     def _make_log_path(self):
-        return Path(LOG_DIR) / f"self_{self.session_ts}_ep{self.episode_count:03d}.jsonl"
+        return Path(LOG_DIR) / f"self_{self.session_ts}.jsonl"
 
     def on_registered(self, iface: TMInterface):
-        print("[OK] Self-Learner Ready.")
-        iface.register_custom_command("save")
-        
-        # Запускаем логгер
-        self.current_log_path = self._make_log_path()
+        print(f"[OK] Ready. Speed: {GAME_SPEED}")
+        iface.set_speed(GAME_SPEED)
         self.writer = WriterThread(self.q, self.current_log_path)
         self.writer.start()
-        print(f"[LOG] Writing to {self.current_log_path}")
 
     def on_shutdown(self, iface):
         if self.writer: self.writer.stop()
 
     def on_run_step(self, iface: TMInterface, t: int):
-        if t < 0 or self.is_training: return
+        # ---------------------------------------------------------
+        # 1. АКТИВНЫЙ ЦИКЛ РЕСТАРТА (THE FIX)
+        # ---------------------------------------------------------
+        if self.is_waiting_for_restart:
+            # Если время маленькое (0-1000мс), значит рестарт прошел успешно
+            if t >= 0 and t < 1500:
+                self.is_waiting_for_restart = False
+                self.stuck_counter = 0
+                self.current_episode = []
+                self.total_reward = 0.0
+                self.last_pos = None
+                print(f"--- Start Ep {self.episode_count + 1} ---")
+                
+                # Обучение пока таймер тикает 3-2-1
+                if self.episode_count > 0 and self.episode_count % TRAIN_EVERY_EPISODES == 0:
+                    self.train_network()
+            else:
+                # МЫ ЗАСТРЯЛИ (время всё еще старое или мы в меню)
+                self.stuck_counter += 1
+                
+                # Каждые 10 тиков спамим команду
+                if self.stuck_counter % 10 == 0:
+                    iface.give_up() # Обычный рестарт
+                
+                # Если долго не помогает (например, вылетели в меню медалей)
+                # Жмем Respawn (это кнопка Enter/Improve в меню)
+                if self.stuck_counter > 50 and self.stuck_counter % 20 == 0:
+                     iface.respawn()
+                
+                return # Выходим, не управляем машиной
 
+        # ---------------------------------------------------------
+        # 2. ПРОВЕРКА НА КОНЕЦ ЗАЕЗДА
+        # ---------------------------------------------------------
         try:
             s = iface.get_simulation_state()
             scene = getattr(s, "scene_mobil", None)
             if not scene: return
         except: return
 
-        # 1. Observation
+        is_finished = False
+        p_info = getattr(s, "player_info", None)
+        if p_info and getattr(p_info, "race_finished", False):
+            is_finished = True
+        
+        should_end = is_finished or (t < 100 and len(self.current_episode) > 20)
+
+        if should_end:
+            self.finish_episode(iface, is_finished, s.race_time)
+            return 
+
+        # ---------------------------------------------------------
+        # 3. УПРАВЛЕНИЕ
+        # ---------------------------------------------------------
+        if t < 0:
+            iface.set_input_state(accelerate=True, gas=65536)
+            return
+
         obs = self.make_obs(s)
         
-        # 2. Action Selection
-        if t < FORCE_GAS_MS:
-            # === FORCED START ===
-            steer_val = 0.0 
-            throttle_val = 1.0 
-            brake_val = 0.0
-        else:
-            obs_t = torch.FloatTensor(obs).unsqueeze(0)
-            with torch.no_grad():
-                steer, tb = self.model(obs_t)
-            
-            noise = np.random.normal(0, EXPLORATION_NOISE)
-            steer_val = np.clip(float(steer.item()) + noise, -1.0, 1.0)
-            
-            # --- ХАК: Всегда газ, если сеть еще тупая ---
-            raw_gas = float(tb[0,0])
-            throttle_val = 1.0 if raw_gas > 0.3 else raw_gas
-            brake_val = 0.0 # Отключаем тормоз пока учимся ехать вперед
+        obs_t = torch.FloatTensor(obs).unsqueeze(0)
+        with torch.no_grad():
+            steer, tb = self.model(obs_t)
+        
+        noise = np.random.normal(0, EXPLORATION_NOISE)
+        steer_val = np.clip(float(steer.item()) + noise, -1.0, 1.0)
+        throttle_val = 1.0 if float(tb[0,0]) > 0.3 else 0.0
+        brake_val = 0.0 
 
-        # 3. Reward Calculation
+        if t < FORCE_GAS_MS:
+            steer_val = 0.0
+            throttle_val = 1.0
+
         reward = self.calculate_reward(s, steer_val)
         self.total_reward += reward
 
-        action_vec = np.array([steer_val, throttle_val, brake_val])
-        
-        # 4. Store Step (Memory)
         self.current_episode.append({
             'obs': obs,
-            'act': action_vec,
+            'act': np.array([steer_val, throttle_val, brake_val]),
             'reward': reward
         })
+        self.last_pos = np.array(self.f3(s.position))
 
-        # 5. LOGGING (Запись в файл .jsonl)
-        # Пишем только каждый 5-й кадр (100мс), чтобы не забивать диск
-        if t % 100 == 0:
-            rec = {
-                "time": int(t),
-                "reward": float(reward),
-                "speed": float(np.linalg.norm(self.f3(s.velocity)) * 3.6),
-                "pos": self.f3(s.position),
-                "act": [float(steer_val), float(throttle_val), float(brake_val)]
-            }
-            try: self.q.put_nowait(rec)
-            except: pass
-
-        # 6. Apply Control
         iface.set_input_state(
-            sim_clear_buffer=False,
             accelerate=throttle_val > 0.5,
             brake=brake_val > 0.5,
             left=steer_val < -0.1,
@@ -247,112 +274,88 @@ class SelfLearningAgent(Client):
             gas=65536 if throttle_val > 0.5 else 0
         )
 
-        # 7. Check End
-        # Если рестарт (время сбросилось) или финиш
-        if s.race_time < 100 and len(self.current_episode) > 20:
-            self.end_episode(iface)
+        if t % 100 == 0:
+            rec = {
+                "time": int(t),
+                "reward": float(reward),
+                "speed": float(np.linalg.norm(self.f3(s.velocity)) * 3.6),
+                "act": [float(steer_val), float(throttle_val)]
+            }
+            try: self.q.put_nowait(rec)
+            except: pass
 
-        self.last_pos = np.array(self.f3(s.position))
-        self.last_steer = steer_val
+    def finish_episode(self, iface, finished, race_time):
+        self.episode_count += 1
+        extra_bonus = 0.0
+        status = "RESTART"
+
+        if finished:
+            status = "FINISHED"
+            extra_bonus += REWARD_FINISH
+            if race_time < self.best_time:
+                self.best_time = race_time
+                extra_bonus += REWARD_BEST_TIME
+                print(f"!!! NEW RECORD: {race_time} ms !!!")
+
+        if finished or self.total_reward > 50.0:
+            self.memory.save_episode(self.current_episode, extra_bonus)
+
+        print(f"Ep {self.episode_count} [{status}]: Reward {self.total_reward+extra_bonus:.1f}")
+
+        # === FIX ===
+        self.is_waiting_for_restart = True
+        self.stuck_counter = 0 # Сброс счетчика
+        
+        iface.set_input_state(accelerate=False, brake=False, steer=0, gas=0)
+        
+        # Первая попытка
+        iface.give_up()
+
+    def train_network(self):
+        if len(self.memory.buffer) < BATCH_SIZE: return
+        
+        print(" [Training...] ", end="")
+        self.model.train()
+        try:
+            for _ in range(TRAIN_EPOCHS_PER_GEN):
+                obs, act, returns = self.memory.sample(BATCH_SIZE)
+                obs_t = torch.FloatTensor(obs)
+                act_t = torch.FloatTensor(act)
+                ret_t = torch.FloatTensor(returns).unsqueeze(1)
+                
+                p_steer, p_tb = self.model(obs_t)
+                
+                weights = (ret_t - ret_t.mean()) / (ret_t.std() + 1e-5)
+                weights = torch.clamp(weights, 0.0, 5.0)
+                
+                loss_s = (nn.MSELoss(reduction='none')(p_steer, act_t[:, 0:1]) * weights).mean()
+                loss_t = (nn.MSELoss(reduction='none')(p_tb, act_t[:, 1:3]) * weights).mean()
+                
+                loss = loss_s + loss_t
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+            
+            self.model.eval()
+            torch.save(self.model.state_dict(), MODEL_PATH)
+            print("Done.")
+        except Exception as e:
+            print(f"Error: {e}")
 
     def make_obs(self, s):
         vel = np.array(self.f3(s.velocity))
         speed = np.linalg.norm(vel)
         ypr = self.f3(s.yaw_pitch_roll)
-        
-        feat = [
-            vel[0]/100, vel[1]/100, vel[2]/100,
-            speed/100,
-            ypr[0], ypr[1], ypr[2],
-        ] + [0.0] * 12 
+        feat = [vel[0]/100, vel[1]/100, vel[2]/100, speed/100, ypr[0], ypr[1], ypr[2]] + [0.0]*12 
         return np.array(feat[:19], dtype=np.float32)
 
     def calculate_reward(self, s, steer):
         vel = np.array(self.f3(s.velocity))
         speed_kmh = np.linalg.norm(vel) * 3.6
-        
-        r = 0.0
-        # + Скорость (основной драйвер)
-        r += (speed_kmh / 100.0) * REWARD_SPEED
-        
-        # + Дистанция
+        r = (speed_kmh / 100.0) * REWARD_SPEED
         if self.last_pos is not None:
-            pos = np.array(self.f3(s.position))
-            dist = np.linalg.norm(pos - self.last_pos)
-            r += dist * REWARD_DISTANCE
-
-        # - Плавность
-        r += -abs(steer - self.last_steer) * 0.1
+            r += np.linalg.norm(np.array(self.f3(s.position)) - self.last_pos) * REWARD_DISTANCE
         return r
-
-    def end_episode(self, iface):
-        self.episode_count += 1
-        print(f"Ep {self.episode_count}: Reward {self.total_reward:.1f}")
-
-        # Сохранение в память для обучения
-        if self.total_reward > 50.0: 
-            self.memory.save_episode(self.current_episode)
-            if self.total_reward > self.best_reward:
-                self.best_reward = self.total_reward
-                print(f"!!! NEW BEST REWARD: {self.best_reward:.1f} !!!")
-
-        # Ротация лога (создаем новый файл)
-        new_path = self._make_log_path()
-        try: self.q.put_nowait({"_cmd": "rotate", "path": str(new_path)})
-        except: pass
-
-        # Обучение каждые 5 эпизодов
-        if self.episode_count % 5 == 0 and len(self.memory.buffer) > BATCH_SIZE:
-            # Чтобы не блокировать игру надолго, можно вынести train в отдельный поток,
-            # но пока оставим синхронно
-            self.train_step()
-            
-            # === AUTO-RESTART ===
-            # Если мы только что обучились, полезно начать заезд заново
-            print("Restarting track...")
-            iface.give_up() # Это нажимает "Give Up" (Restart)
-
-        self.current_episode = []
-        self.total_reward = 0.0
-        self.last_pos = None
-
-    def train_step(self):
-        print("Training...", end="")
-        self.is_training = True
-        self.model.train()
-        
-        total_loss = 0
-        steps = 0
-        
-        for _ in range(TRAIN_EPOCHS_PER_GEN):
-            obs, act, returns = self.memory.sample(BATCH_SIZE)
-            
-            obs_t = torch.FloatTensor(obs)
-            act_t = torch.FloatTensor(act)
-            returns_t = torch.FloatTensor(returns).unsqueeze(1)
-            
-            pred_steer, pred_tb = self.model(obs_t)
-            
-            # Loss взвешенный на награду
-            weights = (returns_t - returns_t.mean()) / (returns_t.std() + 1e-5)
-            weights = torch.clamp(weights, 0.0, 5.0)
-            
-            loss_steer = (nn.MSELoss(reduction='none')(pred_steer, act_t[:, 0:1]) * weights).mean()
-            loss_tb = (nn.MSELoss(reduction='none')(pred_tb, act_t[:, 1:3]) * weights).mean()
-            
-            loss = loss_steer + loss_tb
-            
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            
-            total_loss += loss.item()
-            steps += 1
-
-        self.model.eval()
-        torch.save(self.model.state_dict(), MODEL_PATH)
-        print(f" Done. Loss: {total_loss/steps:.4f}")
-        self.is_training = False
 
     def f3(self, v):
         try: return [v[0], v[1], v[2]]
