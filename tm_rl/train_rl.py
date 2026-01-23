@@ -1,4 +1,21 @@
-def ppo_update(model, buffer, optimizer, gamma=0.99, eps_clip=0.2):
+"""PPO update step for Trackmania RL."""
+
+from __future__ import annotations
+
+from typing import Dict
+
+import torch
+
+
+def ppo_update(
+    model,
+    buffer,
+    optimizer,
+    gamma: float = 0.99,
+    eps_clip: float = 0.2,
+) -> Dict[str, float]:
+    if not buffer.rewards:
+        return {"loss": 0.0, "actor_loss": 0.0, "critic_loss": 0.0}
     # compute returns & advantages
     returns = []
     G = 0
@@ -7,13 +24,16 @@ def ppo_update(model, buffer, optimizer, gamma=0.99, eps_clip=0.2):
         G = r + gamma * G
         returns.insert(0, G)
 
-    returns = torch.tensor(returns)
     values = torch.cat(buffer.values).squeeze()
+    device = values.device
+    returns = torch.tensor(returns, dtype=values.dtype, device=device)
     advantages = returns - values.detach()
 
-    obs = torch.stack(buffer.obs)
-    actions = torch.stack(buffer.actions)
-    old_logprobs = torch.stack(buffer.logprobs)
+    obs = torch.stack(buffer.obs).to(device)
+    actions = torch.stack(buffer.actions).to(device)
+    old_logprobs = torch.stack(buffer.logprobs).to(device)
+    if old_logprobs.dim() > 1:
+        old_logprobs = old_logprobs.sum(dim=1)
 
     mu, std, new_values = model(obs)
     dist = torch.distributions.Normal(mu, std)
@@ -31,3 +51,9 @@ def ppo_update(model, buffer, optimizer, gamma=0.99, eps_clip=0.2):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+
+    return {
+        "loss": float(loss.detach().cpu()),
+        "actor_loss": float(actor_loss.detach().cpu()),
+        "critic_loss": float(critic_loss.detach().cpu()),
+    }

@@ -1,16 +1,91 @@
-# псевдокод логики
+"""Minimal Trackmania RL agent loop helpers."""
 
-obs = obs_vec(state)
-mu, std, value = model(obs)
-action = sample(mu, std)
+from __future__ import annotations
 
-apply_action(action)
+from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
 
-reward = compute_reward(prev_state, state, action)
-done = is_done(prev_state, state)
+import numpy as np
+import torch
 
-buffer.add(obs, action, logprob, reward, value, done)
+from tm_rl.agents.controls import ControlConfig, SteeringSmoother, decide_controls
+from tm_rl.env import compute_reward, is_done, obs_vec
+from tm_rl.utils.ghost import GhostData, LookaheadConfig
 
-if buffer_size >= N:
-    ppo_update(...)
-    buffer.clear()
+
+@dataclass
+class AgentConfig:
+    """Configuration for the minimal agent loop."""
+
+    device: str = "cpu"
+    control: ControlConfig = ControlConfig()
+    lookahead: LookaheadConfig = LookaheadConfig()
+
+
+class TrackmaniaAgent:
+    """Minimal executor for driving the car from model outputs."""
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        ghost: GhostData,
+        cfg: Optional[AgentConfig] = None,
+    ) -> None:
+        self.model = model
+        self.ghost = ghost
+        self.cfg = cfg or AgentConfig()
+        self.smoother = SteeringSmoother(self.cfg.control.steer_smooth_alpha)
+        self.prev_state: Optional[Dict] = None
+
+    def reset(self) -> None:
+        self.prev_state = None
+        self.smoother.reset()
+
+    def act(
+        self,
+        state: Dict,
+        race_time_ms: int,
+    ) -> Tuple[Dict[str, bool], np.ndarray, Optional[Dict[str, float]]]:
+        """Return control inputs, raw action, and optional transition info."""
+        obs, _ = obs_vec(state, self.ghost, self.cfg.lookahead)
+        obs_t = torch.tensor(obs, dtype=torch.float32, device=self.cfg.device).unsqueeze(0)
+
+        with torch.no_grad():
+            mu, std, value = self.model(obs_t)
+            dist = torch.distributions.Normal(mu, std)
+            action_t = dist.sample()
+            logprob_t = dist.log_prob(action_t).sum(dim=1)
+
+        action = action_t.squeeze(0).cpu().numpy()
+
+        accel_on, brake_on, steer_int, left, right = decide_controls(
+            steer_raw=float(action[0]),
+            throttle_prob=float(action[1]),
+            brake_prob=float(action[2]),
+            speed_norm=float(state.get("speed_norm", 0.0)),
+            race_time_ms=race_time_ms,
+            cfg=self.cfg.control,
+            smoother=self.smoother,
+        )
+
+        controls = {
+            "accelerate": accel_on,
+            "brake": brake_on,
+            "left": left,
+            "right": right,
+            "steer_int": steer_int,
+        }
+
+        transition: Optional[Dict[str, float]] = None
+        if self.prev_state is not None:
+            reward = compute_reward(self.prev_state, state, action)
+            done = is_done(self.prev_state, state)
+            transition = {
+                "reward": float(reward),
+                "done": float(done),
+                "value": float(value.item()),
+                "logprob": float(logprob_t.item()),
+            }
+
+        self.prev_state = state
+        return controls, action, transition
