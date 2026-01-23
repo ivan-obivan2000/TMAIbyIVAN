@@ -106,6 +106,7 @@ class RLClient(Client):
         self.global_steps = 0
         self.episode_reward = 0.0
         self.episode_steps = 0
+        self.total_reward = 0.0
         self.episode_start_race_time = None
         self.stuck_since_ms = None
         self.stuck_reason = None
@@ -140,10 +141,15 @@ class RLClient(Client):
         race_time = int(getattr(s, "race_time", 0))
 
         # ===== restart detection =====
-        if (
+        restarted = (
             (self.prev_t is not None and t < self.prev_t)
             or (self.prev_race_time is not None and race_time < self.prev_race_time)
-        ):
+        )
+        if restarted:
+            print("[EP] restart detected → forcing done")
+            self.buffer.force_done()
+            self.episode_reward = 0.0
+            self.episode_steps = 0
             self.agent.reset()
             self.episode_start_race_time = race_time
             self.stuck_since_ms = None
@@ -175,10 +181,10 @@ class RLClient(Client):
             speed_norm = float(state.get("speed_norm", 0.0))
             distance_delta = float(reward_info.get("distance_delta", 0.0))
 
-            if speed_norm < 1.0 and distance_delta < 0.002:
+            if speed_norm < 0.5 and distance_delta < 0.002:
                 if self.stuck_since_ms is None:
                     self.stuck_since_ms = race_time
-                elif race_time - self.stuck_since_ms >= 2500:
+                elif race_time - self.stuck_since_ms >= 2000:
                     done = True
                     self.stuck_reason = "anti_stuck"
             else:
@@ -198,6 +204,7 @@ class RLClient(Client):
 
             self.global_steps += 1
             self.episode_reward += reward
+            self.total_reward += reward
             self.episode_steps += 1
 
             if self.global_steps % LOG_EVERY_STEPS == 0:
@@ -205,6 +212,7 @@ class RLClient(Client):
                     "step": self.global_steps,
                     "reward": reward,
                     "episode_reward": self.episode_reward,
+                    "total_reward": self.total_reward,
                     "episode_steps": self.episode_steps,
                     "speed": float(state.get("speed_norm", 0.0)),
                     "race_time_ms": int(state.get("race_time_ms", 0)),
@@ -215,6 +223,7 @@ class RLClient(Client):
                     f" step={self.global_steps}"
                     f" reward={reward:.3f}"
                     f" ep_reward={self.episode_reward:.3f}"
+                    f" total_reward={self.total_reward:.3f}"
                     f" speed={speed_norm:.2f}"
                     f" time_ms={int(state.get('race_time_ms', 0))}"
                     f" dist={distance_delta:.3f}"
@@ -273,6 +282,7 @@ class RLClient(Client):
 
         # ===== episode end =====
         if transition and done:
+            print("[EP] done=True → reset agent and ep_reward")
             self.agent.reset()
             episode_time_ms = 0
             if self.episode_start_race_time is not None:
@@ -284,6 +294,7 @@ class RLClient(Client):
                             "episode": True,
                             "step": self.global_steps,
                             "episode_reward": self.episode_reward,
+                            "total_reward": self.total_reward,
                             "episode_steps": self.episode_steps,
                             "episode_time_ms": episode_time_ms,
                             "episode_reason": self.stuck_reason or "done",

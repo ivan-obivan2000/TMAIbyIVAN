@@ -19,3 +19,7 @@ class RolloutBuffer:
         self.rewards.append(reward)
         self.values.append(value)
         self.dones.append(done)
+
+    def force_done(self):
+        if self.dones:
+            self.dones[-1] = True

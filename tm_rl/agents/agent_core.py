@@ -41,6 +41,8 @@ class TrackmaniaAgent:
     def reset(self) -> None:
         self.prev_state = None
         self.smoother.reset()
+        if hasattr(self, "hist"):
+            self.hist.clear()
 
     def act(
         self,
