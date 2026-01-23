@@ -18,6 +18,7 @@ class AgentConfig:
     """Configuration for the minimal agent loop."""
 
     device: str = "cpu"
+    deterministic_action: bool = True
     control: ControlConfig = field(default_factory=ControlConfig)
     lookahead: LookaheadConfig = field(default_factory=LookaheadConfig)
 
@@ -70,12 +71,18 @@ class TrackmaniaAgent:
         with torch.no_grad():
             mu, std, value = self.model(obs_t)
             dist = torch.distributions.Normal(mu, std)
-            action_t = dist.sample()
+            if self.cfg.deterministic_action:
+                action_t = mu
+            else:
+                action_t = dist.sample()
             logprob_t = dist.log_prob(action_t).sum(dim=1)
 
         action = action_t.squeeze(0).cpu().numpy()
+        action[0] = np.clip(action[0], -1.0, 1.0)
+        action[1] = np.clip(action[1], 0.0, 1.0)
+        action[2] = np.clip(action[2], 0.0, 1.0)
 
-        accel_on, brake_on, steer_int, left, right = decide_controls(
+        accel_on, brake_on, steer_int = decide_controls(
             steer_raw=float(action[0]),
             throttle_prob=float(action[1]),
             brake_prob=float(action[2]),
@@ -88,21 +95,27 @@ class TrackmaniaAgent:
         controls = {
             "accelerate": accel_on,
             "brake": brake_on,
-            "left": left,
-            "right": right,
             "steer": steer_int,   # <-- было steer_int
         }
 
         transition: Optional[Dict[str, float | np.ndarray]] = None
         if self.prev_state is not None:
-            reward = compute_reward(self.prev_state, state, action)
+            reward, reward_info = compute_reward(
+                self.prev_state,
+                state,
+                action,
+                return_info=True,
+            )
             done = is_done(self.prev_state, state)
             transition = {
                 "obs": obs_stack,
                 "reward": float(reward),
+                "reward_info": reward_info,
                 "done": float(done),
                 "value": float(value.item()),
                 "logprob": float(logprob_t.item()),
+                "race_time_ms": int(state.get("race_time_ms", 0)),
+                "speed_norm": float(state.get("speed_norm", 0.0)),
             }
 
         self.prev_state = state
