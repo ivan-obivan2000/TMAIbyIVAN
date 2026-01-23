@@ -95,14 +95,22 @@ class TrackmaniaAgent:
 
         transition: Optional[Dict[str, float | np.ndarray]] = None
         if self.prev_state is not None:
-            reward = compute_reward(self.prev_state, state, action)
+            reward, reward_info = compute_reward(
+                self.prev_state,
+                state,
+                action,
+                return_info=True,
+            )
             done = is_done(self.prev_state, state)
             transition = {
                 "obs": obs_stack,
                 "reward": float(reward),
+                "reward_info": reward_info,
                 "done": float(done),
                 "value": float(value.item()),
                 "logprob": float(logprob_t.item()),
+                "race_time_ms": int(state.get("race_time_ms", 0)),
+                "speed_norm": float(state.get("speed_norm", 0.0)),
             }
 
         self.prev_state = state

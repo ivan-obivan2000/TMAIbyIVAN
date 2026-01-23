@@ -106,6 +106,7 @@ class RLClient(Client):
         self.global_steps = 0
         self.episode_reward = 0.0
         self.episode_steps = 0
+        self.episode_start_race_time = None
 
         os.makedirs(LOG_DIR, exist_ok=True)
         os.makedirs(Path(MODEL_PATH).parent, exist_ok=True)
@@ -142,6 +143,10 @@ class RLClient(Client):
             or (self.prev_race_time is not None and race_time < self.prev_race_time)
         ):
             self.agent.reset()
+            self.episode_start_race_time = race_time
+
+        if self.episode_start_race_time is None:
+            self.episode_start_race_time = race_time
 
         self.prev_t = t
         self.prev_race_time = race_time
@@ -161,6 +166,7 @@ class RLClient(Client):
             logprob_t = torch.tensor(transition["logprob"], dtype=torch.float32)
             value_t = torch.tensor(transition["value"], dtype=torch.float32)
             reward = float(transition["reward"])
+            reward_info = transition.get("reward_info", {})
             done = bool(transition["done"])
 
             self.buffer.add(
@@ -183,7 +189,20 @@ class RLClient(Client):
                     "episode_reward": self.episode_reward,
                     "episode_steps": self.episode_steps,
                     "speed": float(state.get("speed_norm", 0.0)),
+                    "race_time_ms": int(state.get("race_time_ms", 0)),
+                    "reward_info": reward_info,
                 }
+                print(
+                    "[LOG]"
+                    f" step={self.global_steps}"
+                    f" reward={reward:.3f}"
+                    f" ep_reward={self.episode_reward:.3f}"
+                    f" speed={float(state.get('speed_norm', 0.0)):.2f}"
+                    f" time_ms={int(state.get('race_time_ms', 0))}"
+                    f" dist={reward_info.get('distance_delta', 0.0):.3f}"
+                    f" time_pen={reward_info.get('time', 0.0):.3f}"
+                    f" finish_bonus={reward_info.get('finish_bonus', 0.0):.3f}"
+                )
                 if self.log_queue:
                     try:
                         self.log_queue.put_nowait(rec)
@@ -237,6 +256,9 @@ class RLClient(Client):
         # ===== episode end =====
         if transition and transition["done"]:
             self.agent.reset()
+            episode_time_ms = 0
+            if self.episode_start_race_time is not None:
+                episode_time_ms = max(0, race_time - self.episode_start_race_time)
             if self.log_queue:
                 try:
                     self.log_queue.put_nowait(
@@ -245,12 +267,20 @@ class RLClient(Client):
                             "step": self.global_steps,
                             "episode_reward": self.episode_reward,
                             "episode_steps": self.episode_steps,
+                            "episode_time_ms": episode_time_ms,
                         }
                     )
                 except Exception:
                     pass
+            print(
+                "[EPISODE]"
+                f" steps={self.episode_steps}"
+                f" reward={self.episode_reward:.2f}"
+                f" time_ms={episode_time_ms}"
+            )
             self.episode_reward = 0.0
             self.episode_steps = 0
+            self.episode_start_race_time = None
 
 
 # ==========================
