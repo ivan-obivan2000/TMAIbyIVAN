@@ -1,9 +1,0 @@
-numpy
-tminterface
-torch
-torchvision
-gym
-opencv-python
-mss
-pywin32
-vgamepad
